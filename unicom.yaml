@@ -1,0 +1,59 @@
+name: 中国联通余量
+description: 话费、语音、通用/定向流量余量小组件。打开联通 App 自动获取登录信息，Cookie 过期自动续登。
+author: shui1iao
+icon: simcard.fill
+homepage: https://github.com/shui1iao/egern-unicom
+
+env_schema:
+  TITLE:
+    name: 标题
+    description: 小组件左上角标题，最多 12 个字，留空显示「中国联通」
+    default_value: 中国联通
+  SHOW_PHONE_SUFFIX:
+    name: 显示号码尾号
+    description: 开启后在标题旁显示手机号后四位
+    default_value: "false"
+    options:
+      - "true"
+      - "false"
+  LOW_FEE:
+    name: 话费提醒线（元）
+    description: 话费低于这个数时标红，填 0 关闭
+    default_value: "10"
+
+scriptings:
+  - generic:
+      name: unicom-balance
+      script_url: https://raw.githubusercontent.com/shui1iao/egern-unicom/main/unicom.js
+      timeout: 30
+  # 联通 App 首页查询余额时，记录 Cookie 和手机号
+  - http_request:
+      name: unicom-balance-capture
+      match: '^https://m\.client\.10010\.com/mobileserviceimportant/home/queryUserInfoSeven'
+      script_url: https://raw.githubusercontent.com/shui1iao/egern-unicom/main/unicom.js
+      timeout: 10
+  # 联通 App 启动自动登录时，从请求表单里记录 appId
+  - http_request:
+      name: unicom-balance-login
+      match: '^https://(m\.client|loginxhm)\.10010\.com/mobileService/onLine\.htm'
+      script_url: https://raw.githubusercontent.com/shui1iao/egern-unicom/main/unicom.js
+      timeout: 10
+      body_required: true
+      binary_body: true
+  # 自动登录返回时，记录续登用的 token_online 和新 Cookie
+  - http_response:
+      name: unicom-balance-token
+      match: '^https://(m\.client|loginxhm)\.10010\.com/mobileService/onLine\.htm'
+      script_url: https://raw.githubusercontent.com/shui1iao/egern-unicom/main/unicom.js
+      timeout: 10
+      body_required: true
+
+mitm:
+  hostnames:
+    includes:
+      - m.client.10010.com
+      - loginxhm.10010.com
+
+widgets:
+  - name: 中国联通余量
+    script_name: unicom-balance
