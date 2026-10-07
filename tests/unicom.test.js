@@ -55,6 +55,15 @@ function happyRoute(method, url) {
   throw new Error('unexpected ' + url);
 }
 
+function findText(node, text) {
+  if (node.type === 'text' && node.text === text) return node;
+  for (const c of node.children || []) {
+    const hit = findText(c, text);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function hasWarnIcon(node) {
   if (node.type === 'image' && node.src === 'sf-symbol:exclamationmark.triangle.fill') return true;
   return (node.children || []).some(hasWarnIcon);
@@ -220,12 +229,16 @@ test('正常查询：各尺寸 DSL 合法，数值和分组正确', async () => 
       assert.doesNotMatch(all, /国内语音/); // 语音资源不算流量包
     }
     if (family === 'systemSmall') {
-      assert.match(all, /45\.67/);
-      assert.match(all, /12\.5GB \/ 30GB/);
-      assert.match(all, /10GB \/ 20GB/);
+      assert.match(all, /通用剩余\|共 30GB\|12\.5\|GB/);
+      assert.match(all, /话费\|45\.67\|元/);
+      assert.match(all, /定向剩余\|10\|GB/);
     }
+    if (family === 'systemMedium') assert.match(all, /语音 120 分钟/); // 三列放不下时，语音并入话费列
     if (family === 'accessoryInline') assert.match(all, /话费 45\.67元 · 通用剩 12\.5GB/);
-    if (family === 'accessoryRectangular') assert.match(all, /通用剩 12\.5GB · 定向剩 10GB/);
+    if (family === 'accessoryRectangular') {
+      assert.match(all, /通用剩余\|.*\|12\.5\|GB/);
+      assert.match(all, /话费 45\.67 元 · 定向剩余 10 GB/);
+    }
     if (family === 'accessoryCircular') assert.match(all, /通用\|12\.5\|GB/);
     const cache = storage.getJSON(PREFIX + 'cache');
     assert.equal(cache.complete, true);
@@ -405,7 +418,7 @@ test('只有明细接口失败：话费正常显示，并提示明细失败', as
   const all = texts(w).join('|');
   assert.match(all, /45\.67/);
   assert.ok(hasWarnIcon(w));
-  assert.match(all, /剩余通用流量\|12\.5GB/); // 退回汇总接口的流量总数
+  assert.match(all, /剩余通用流量\|12\.5\|GB/); // 退回汇总接口的流量总数
   const large = makeCtx({ storage, family: 'systemLarge', route(method, url) {
     if (url.includes('queryUserInfoSeven')) return { body: summaryBody() };
     return { status: 502, body: 'bad gateway' };
@@ -470,6 +483,8 @@ test('自定义标题和话费提醒线', async () => {
   const { ctx } = makeCtx({ storage, family: 'systemMedium', route: happyRoute, env: { TITLE: '主卡', LOW_FEE: '50' } });
   const w = validateDSL(await run(ctx));
   assert.match(texts(w).join('|'), /主卡/);
-  const red = JSON.stringify(w).includes('"text":"45.67","font":{"size":28,"weight":"semibold"},"textColor":{"light":"#FF3B30"');
-  assert.ok(red, '话费低于 50 元应标红');
+  const fee = findText(w, '45.67');
+  assert.ok(fee && fee.textColor.light === '#FF3B30', '话费低于 50 元应标红');
+  const normal = makeCtx({ storage: authStore(), family: 'systemMedium', route: happyRoute });
+  assert.equal(findText(validateDSL(await run(normal.ctx)), '45.67').textColor.light, '#1D1D1F');
 });

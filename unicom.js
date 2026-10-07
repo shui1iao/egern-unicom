@@ -737,11 +737,15 @@ function buildView(ctx, loaded) {
   };
 
   // message 给大号底部整行显示；badge 给小号/中号放在标题右侧（替代时间），避免多占一行
+  const updatedAt = num(data.updatedAt);
+  view.timeShort = view.time.length > 5 && updatedAt ? view.time.slice(0, 5) : view.time;
   view.badge = '';
+  view.badgeShort = '';
   if (loaded.state === 'auth') {
     view.tone = 'danger';
     view.message = '登录已失效，请打开联通 App 刷新';
     view.badge = '需重新登录';
+    view.badgeShort = '需登录';
   } else if (loaded.state === 'stale') {
     view.tone = 'warn';
     view.message = '查询失败，显示 ' + view.time + ' 的数据';
@@ -753,30 +757,32 @@ function buildView(ctx, loaded) {
   } else if (loaded.state === 'nophone' && !view.fee) {
     view.message = '在联通 App 首页查一次余额以显示话费';
     view.badge = '去 App 查余额';
+    view.badgeShort = '查余额';
   }
   return view;
 }
 
 /* ============================== 渲染 ============================== */
+// 视觉按 Apple 官网设计规范：中性色为主，唯一强调色是 Apple Blue；字重只用 regular / semibold；
+// 无描边、无渐变、无阴影；卡片圆角 12；层级靠字号和留白区分。红/橙只用于余额不足、查询失败等状态。
 
 const C = {
-  bg: { light: '#FFFFFF', dark: '#1C1C1E' },
-  card: { light: '#F2F2F7', dark: '#2C2C2E' },
-  text: { light: '#1C1C1E', dark: '#FFFFFF' },
-  sub: { light: '#6E6E73', dark: '#AEAEB2' },
-  faint: { light: '#8E8E93', dark: '#8E8E93' },
-  track: { light: '#E5E5EA', dark: '#3A3A3C' },
-  brand: { light: '#E60012', dark: '#FF453A' },
-  general: { light: '#007AFF', dark: '#0A84FF' },
-  directed: { light: '#34C759', dark: '#30D158' },
+  bg: { light: '#FFFFFF', dark: '#000000' },
+  card: { light: '#F5F5F7', dark: '#272729' },
+  text: { light: '#1D1D1F', dark: '#FFFFFF' },
+  secondary: { light: '#000000CC', dark: '#FFFFFFCC' },
+  tertiary: { light: '#0000007A', dark: '#FFFFFF7A' },
+  track: { light: '#E8E8ED', dark: '#FFFFFF26' },
+  accent: { light: '#0071E3', dark: '#2997FF' },
   warn: { light: '#FF9500', dark: '#FF9F0A' },
   danger: { light: '#FF3B30', dark: '#FF453A' },
 };
 
-const GROUPS = [
-  { key: 'general', label: '通用', color: C.general },
-  { key: 'directed', label: '定向', color: C.directed },
-];
+// 通用流量用 Apple Blue，定向流量用中性灰
+const SERIES = {
+  general: { label: '通用', color: C.accent },
+  directed: { label: '定向', color: C.tertiary },
+};
 
 function T(text, size, color, weight, extra) {
   return {
@@ -806,317 +812,368 @@ function icon(name, size, color) {
   return { type: 'image', src: 'sf-symbol:' + name, width: size, height: size, color };
 }
 
-function alpha(color, aa) {
-  return { light: color.light + aa, dark: color.dark + aa };
+function toneColor(tone) {
+  return tone === 'danger' ? C.danger : tone === 'warn' ? C.warn : C.tertiary;
 }
 
 function ratioColor(ratio, base) {
-  if (ratio === null) return base;
+  if (ratio === null || ratio === undefined) return base;
   if (ratio < 0.1) return C.danger;
   if (ratio < 0.2) return C.warn;
   return base;
 }
 
-// 剩余比例条：有总量时按剩余/总量填充；纯不限量画满一条浅色
-function bar(g, color, h) {
-  const r = g.kind === 'limited' && g.ratio !== null ? Math.round(g.ratio * 1000) : g.kind === 'unlimited' ? 1000 : 0;
-  const fillColor = g.kind === 'unlimited' ? alpha(color, '59') : ratioColor(g.ratio, color);
+// 数字 + 单位：底部对齐，单位按字号差补偿下沉，看起来落在同一基线上
+function amount(value, unit, size, color, unitSize) {
+  const children = [T(value, size, color || C.text, 'semibold', { minScale: 0.5 })];
+  if (unit) {
+    const lift = Math.max(0, Math.round((size - unitSize) * 0.2));
+    children.push({ type: 'stack', padding: [0, 0, lift, 0], children: [T(unit, unitSize, C.secondary, 'regular', { minScale: 0.8 })] });
+  }
+  return row(children, Math.max(2, Math.round(size / 8)), { alignItems: 'end' });
+}
+
+// 剩余比例条；没有比例时占同样高度的空位，保证几列的说明文字对齐
+function bar(ratio, color, h) {
+  if (ratio === null || ratio === undefined) return { type: 'stack', height: h, children: [] };
+  const r = Math.max(0, Math.min(1000, Math.round(ratio * 1000)));
   const children =
     r <= 0
       ? [spacer()]
       : [
-          { type: 'stack', flex: r, height: h, borderRadius: h / 2, backgroundColor: fillColor, children: [] },
+          { type: 'stack', flex: r, height: h, borderRadius: h / 2, backgroundColor: ratioColor(ratio, color), children: [] },
           ...(r < 1000 ? [{ type: 'spacer', flex: 1000 - r }] : []),
         ];
   return { type: 'stack', direction: 'row', height: h, borderRadius: h / 2, backgroundColor: C.track, children };
 }
 
-function toneColor(tone) {
-  return tone === 'danger' ? C.danger : tone === 'warn' ? C.warn : C.faint;
+function feeColor(view) {
+  return view.feeLow ? C.danger : C.text;
 }
 
-// 右侧：更新时间；查询失败时时间前加警示图标（表示是旧数据），紧凑尺寸用 badge 替换时间
-function header(view, s, compact) {
-  const badge = compact ? view.badge : '';
-  const color = view.tone === 'normal' ? (badge ? C.sub : C.faint) : toneColor(view.tone);
-  const showSuffix = view.suffix && !(compact && badge && s.narrow);
+function voiceText(view) {
+  return view.voice ? '语音 ' + view.voice.value + ' ' + view.voice.unit : '';
+}
+
+/* ---------- 内容挑选：各尺寸共用 ---------- */
+
+function groupTile(key, g) {
+  const def = SERIES[key];
+  if (g.kind === 'limited') {
+    return {
+      label: def.label + '剩余',
+      value: g.remain,
+      ratio: g.ratio,
+      color: def.color,
+      lines: ['已用 ' + flowText(g.used), '共 ' + flowText(g.total) + (g.withUnlimited ? ' · 含不限' : '')],
+    };
+  }
+  return {
+    label: def.label + '已用',
+    value: g.used,
+    ratio: null,
+    color: def.color,
+    lines: [g.kind === 'unlimited' ? '不限量' : '未提供总量', ''],
+  };
+}
+
+// 中号/大号的几列：话费 →（有空位时）语音 → 通用/定向；没有流量明细时用首页的流量总数
+function tilesFor(view, max) {
+  const tiles = [];
+  const groups = ['general', 'directed'].filter((k) => view[k]).map((k) => groupTile(k, view[k]));
+  const flowTiles = groups.length || !view.flow ? groups : [{ label: view.flow.title, value: { v: view.flow.value, u: view.flow.unit }, ratio: null, lines: ['', ''] }];
+  let fee = null;
+  if (view.fee) {
+    fee = { label: view.fee.title, value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view), ratio: null, lines: ['', ''] };
+    tiles.push(fee);
+  }
+  if (view.voice) {
+    if (tiles.length + flowTiles.length < max) {
+      tiles.push({ label: view.voice.title, value: { v: view.voice.value, u: view.voice.unit }, ratio: null, lines: ['', ''] });
+    } else if (fee) {
+      fee.lines[0] = voiceText(view);
+    }
+  }
+  return tiles.concat(flowTiles).slice(0, max);
+}
+
+// 小号和锁屏的主数字：优先通用剩余
+function heroFor(view) {
+  const g = view.general;
+  if (g && g.kind === 'limited') return { label: '通用剩余', short: '通用', value: g.remain, side: '共 ' + flowText(g.total), ratio: g.ratio, color: C.accent, key: 'general' };
+  if (g) return { label: '通用已用', short: '通用', value: g.used, side: g.kind === 'unlimited' ? '不限量' : '', ratio: null, key: 'general' };
+  if (view.flow) return { label: view.flow.title, short: '流量', value: { v: view.flow.value, u: view.flow.unit }, side: '', ratio: null, key: 'flow' };
+  if (view.fee) return { label: view.fee.title, short: '话费', value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view), side: '', ratio: null, key: 'fee' };
+  const d = view.directed;
+  if (d) return { label: d.kind === 'limited' ? '定向剩余' : '定向已用', short: '定向', value: d.kind === 'limited' ? d.remain : d.used, side: d.kind === 'limited' ? '共 ' + flowText(d.total) : '', ratio: d.kind === 'limited' ? d.ratio : null, color: C.tertiary, key: 'directed' };
+  return null;
+}
+
+// 主数字以外，再挑最多 n 项：话费、定向、语音、流量总数
+function extrasFor(view, hero, n) {
+  const out = [];
+  if (view.fee && hero.key !== 'fee') out.push({ label: '话费', value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view) });
+  const d = view.directed;
+  if (d && hero.key !== 'directed') {
+    if (d.kind === 'limited') out.push({ label: '定向剩余', value: d.remain });
+    else if (d.kind === 'unlimited') out.push({ label: '定向', value: { v: '不限量', u: '' } });
+    else out.push({ label: '定向已用', value: d.used });
+  }
+  if (view.voice) out.push({ label: '语音', value: { v: view.voice.value, u: view.voice.unit } });
+  if (view.flow && hero.key !== 'flow' && !view.general) out.push({ label: '流量', value: { v: view.flow.value, u: view.flow.unit } });
+  return out.slice(0, n);
+}
+
+/* ---------- 公共部件 ---------- */
+
+// 标题栏：标题 + 更新时间；查询失败时时间前加警示图标，紧凑尺寸用 badge 代替时间。
+// 小号宽度只有约 120pt：时间不是今天时只显示日期，状态用更短的写法，并且不显示尾号
+function header(view, size, compact, narrow) {
+  const badge = compact ? (narrow ? view.badgeShort : view.badge) : '';
+  const status = view.tone === 'normal' ? C.tertiary : toneColor(view.tone);
+  const showSuffix = view.suffix && !narrow;
+  const time = narrow ? view.timeShort : view.time;
   return row(
     [
-      icon('simcard.fill', s.icon, C.brand),
-      T(view.title, s.title, C.text, 'semibold'),
-      ...(showSuffix ? [T(view.suffix, s.time, C.sub, 'medium', { minScale: 0.8 })] : []),
+      T(view.title, size, C.text, 'semibold', { minScale: 0.8 }),
+      ...(showSuffix ? [T(view.suffix, size - 1, C.tertiary, 'regular', { minScale: 0.8 })] : []),
       spacer(),
-      ...(view.tone === 'normal' ? [] : [icon('exclamationmark.triangle.fill', s.time, color)]),
-      T(badge || view.time, s.time, color, view.tone === 'normal' ? 'regular' : 'medium', { minScale: 0.8 }),
+      ...(view.tone === 'normal' ? [] : [icon('exclamationmark.triangle.fill', size - 2, status)]),
+      T(badge || time, size - 1, badge && view.tone === 'normal' ? C.secondary : status, 'regular', { minScale: 0.8 }),
     ],
     4,
   );
 }
 
-function footer(view, size) {
-  if (!view.message) return [];
-  return [T(view.message, size, view.tone === 'normal' ? C.sub : toneColor(view.tone), 'medium', { minScale: 0.6 })];
-}
-
-function feeValueColor(view) {
-  return view.feeLow ? C.danger : C.text;
-}
-
-function valueUnit(value, unit, size, color, unitSize) {
-  return row([T(value, size, color, 'semibold'), T(unit, unitSize, C.sub, 'medium', { minScale: 1 })], 2, { alignItems: 'end' });
-}
-
-function groupMain(g) {
-  if (g.kind === 'limited') return g.remain;
-  if (g.kind === 'unlimited') return { v: '不限量', u: '' };
-  return g.used;
-}
-
-function groupMainLabel(g) {
-  return g.kind === 'limited' ? '剩' : g.kind === 'unlimited' ? '' : '已用';
-}
-
-// 中号/大号的流量分组：标题+剩余、比例条、已用/总量
-function groupBlock(def, g, s) {
-  const main = groupMain(g);
-  const left = g.kind === 'limited' ? '已用 ' + flowText(g.used) : g.kind === 'unlimited' ? '已用 ' + flowText(g.used) : '无总量信息';
-  const right = g.kind === 'limited' ? '共 ' + flowText(g.total) + (g.withUnlimited ? ' · 含不限' : '') : g.kind === 'unlimited' ? '不限量' : '';
+function tile(t, s) {
   return col(
     [
-      row(
-        [
-          T(def.label, s.label, def.color, 'semibold', { minScale: 1 }),
-          spacer(),
-          ...(groupMainLabel(g) ? [T(groupMainLabel(g), s.small, C.sub, 'medium', { minScale: 1 })] : []),
-          T(main.v, s.value, C.text, 'semibold'),
-          ...(main.u ? [T(main.u, s.small, C.sub, 'medium', { minScale: 1 })] : []),
-        ],
-        3,
-        { alignItems: 'end' },
-      ),
-      bar(g, def.color, s.bar),
-      row([T(left, s.small, C.faint), spacer(), T(right, s.small, C.faint)], 4),
+      T(t.label, s.label, C.secondary),
+      spacer(s.labelGap),
+      amount(t.value.v, t.value.u, s.value, t.valueColor || C.text, s.unit),
+      spacer(s.barGap),
+      bar(t.ratio, t.color || C.accent, s.bar),
+      spacer(s.barGap),
+      ...t.lines.map((line) => T(line || ' ', s.caption, C.tertiary, 'regular', { minScale: 0.7 })),
     ],
-    s.groupGap,
+    s.lineGap,
+    { flex: 1 },
   );
-}
-
-// 小号的流量行：标题、剩余/总量、比例条
-function groupCompact(def, g, s) {
-  let text;
-  if (g.kind === 'limited') text = flowText(g.remain) + ' / ' + flowText(g.total);
-  else if (g.kind === 'unlimited') text = '不限 · 已用 ' + flowText(g.used);
-  else text = '已用 ' + flowText(g.used);
-  return col(
-    [
-      row([T(def.label, s.small, def.color, 'semibold', { minScale: 1 }), spacer(), T(text, s.small, C.text, 'medium')], 4),
-      bar(g, def.color, 4),
-    ],
-    3,
-  );
-}
-
-function presentGroups(view) {
-  return GROUPS.map((def) => ({ def, g: view[def.key] })).filter((x) => x.g);
-}
-
-function summaryFlowRow(view, s) {
-  if (!view.flow) return [];
-  return [row([T(view.flow.title, s.small, C.sub), spacer(), T(view.flow.value + view.flow.unit, s.small, C.text, 'semibold')], 4)];
 }
 
 function rootWidget(children, extra) {
   return {
     type: 'widget',
     backgroundColor: C.bg,
-    padding: [12, 14, 12, 14],
-    gap: 6,
+    padding: 16,
+    gap: 0,
     refreshAfter: new Date(Date.now() + REFRESH_MS).toISOString(),
     children,
     ...(extra || {}),
   };
 }
 
+/* ---------- 主屏幕 ---------- */
+
 function buildSmall(view) {
-  const s = { icon: 13, title: 13, time: 10, small: 11, narrow: true };
-  const fee = view.fee
-    ? col([T(view.fee.title, 10, C.sub, 'medium'), valueUnit(view.fee.value, view.fee.unit, 22, feeValueColor(view), 11)], 0)
-    : col([T('话费', 10, C.sub, 'medium'), T('--', 22, C.faint, 'semibold')], 0);
-  const voice = view.voice
-    ? [spacer(), col([T('语音', 10, C.sub, 'medium'), T(view.voice.value + (view.voice.unit === '分钟' ? '分' : view.voice.unit), 13, C.text, 'semibold')], 0, { alignItems: 'end' })]
-    : [];
-  const groups = presentGroups(view);
-  const flows = groups.length ? groups.map(({ def, g }) => groupCompact(def, g, s)) : summaryFlowRow(view, s);
-  return rootWidget([header(view, s, true), row([fee, ...voice], 4, { alignItems: 'end' }), spacer(), ...flows], {
-    padding: [11, 13, 11, 13],
-    gap: 4,
-  });
+  const hero = heroFor(view);
+  if (!hero) return messageView(view, '暂无数据', 'systemSmall');
+  const extras = extrasFor(view, hero, 2);
+  return rootWidget(
+    [
+      header(view, 13, true, true),
+      spacer(),
+      row([T(hero.label, 12, C.secondary), spacer(), ...(hero.side ? [T(hero.side, 11, C.tertiary, 'regular', { minScale: 0.8 })] : [])], 4),
+      amount(hero.value.v, hero.value.u, 28, hero.valueColor || C.text, 13),
+      ...(hero.ratio !== null ? [spacer(5), bar(hero.ratio, hero.color, 4)] : []),
+      spacer(10),
+      row(
+        extras.map((x) => col([T(x.label, 11, C.secondary), amount(x.value.v, x.value.u, 14, x.valueColor || C.text, 11)], 1, { flex: 1 })),
+        10,
+        { alignItems: 'start' },
+      ),
+    ],
+    { padding: [15, 16, 15, 16] },
+  );
 }
+
+const MEDIUM = { label: 11, labelGap: 1, value: 24, unit: 11, barGap: 6, bar: 4, caption: 11, lineGap: 0 };
+const LARGE = { label: 12, labelGap: 2, value: 26, unit: 13, barGap: 8, bar: 5, caption: 12, lineGap: 1 };
 
 function buildMedium(view) {
-  const s = { icon: 14, title: 14, time: 11, label: 12, value: 15, small: 10, bar: 5, groupGap: 3 };
-  const left = col(
-    [
-      T(view.fee ? view.fee.title : '话费', 11, C.sub, 'medium'),
-      view.fee ? valueUnit(view.fee.value, view.fee.unit, 28, feeValueColor(view), 12) : T('--', 28, C.faint, 'semibold'),
-      spacer(2),
-      ...(view.voice ? [row([T(view.voice.title, 11, C.sub), spacer(), T(view.voice.value + view.voice.unit, 11, C.text, 'semibold')], 4)] : []),
-      ...summaryFlowRow(view, { small: 11 }),
-    ],
-    2,
-    { flex: 4 },
-  );
-  const groups = presentGroups(view);
-  const right = col(
-    groups.length
-      ? groups.map(({ def, g }) => groupBlock(def, g, s))
-      : [T(view.hasDetail ? '没有流量包' : '流量明细暂不可用', 11, C.sub)],
-    6,
-    { flex: 6 },
-  );
-  return rootWidget([header(view, s, true), row([left, right], 14, { alignItems: 'start' }), spacer()], {
-    padding: [11, 14, 11, 14],
+  const tiles = tilesFor(view, 3);
+  if (!tiles.length) return messageView(view, '暂无数据', 'systemMedium');
+  return rootWidget([header(view, 13, true), spacer(), row(tiles.map((t) => tile(t, MEDIUM)), 14, { alignItems: 'start' })], {
+    padding: [15, 16, 15, 16],
   });
 }
 
-function capsule(item, fallbackTitle, valueColor) {
+function packageCard(view, maxRows) {
+  const pkgs = view.packages.slice(0, Math.max(1, maxRows));
+  const more = view.packages.length - pkgs.length;
   return col(
     [
-      T(item ? item.title : fallbackTitle, 10, C.sub, 'medium'),
-      item ? valueUnit(item.value, item.unit, 18, valueColor || C.text, 10) : T('--', 18, C.faint, 'semibold'),
+      row([T('流量包', 12, C.secondary), spacer(), ...(more > 0 ? [T('另有 ' + more + ' 项', 11, C.tertiary)] : [])], 4),
+      ...pkgs.map((p) =>
+        row(
+          [
+            { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: p.directed ? SERIES.directed.color : SERIES.general.color, children: [] },
+            T(p.name, 13, C.text, 'regular', { flex: 1, minScale: 0.75 }),
+            T(packageLine(p), 12, C.secondary, 'regular', { minScale: 0.7 }),
+          ],
+          8,
+        ),
+      ),
     ],
-    2,
-    { flex: 1, padding: [8, 10, 8, 10], backgroundColor: C.card, borderRadius: 12 },
+    8,
+    { padding: 12, backgroundColor: C.card, borderRadius: 12 },
   );
 }
 
 function buildLarge(view) {
-  const s = { icon: 16, title: 16, time: 12, label: 13, value: 17, small: 11, bar: 6, groupGap: 4 };
-  const groups = presentGroups(view);
-  // 按小屏 iPhone 大号约 324pt 高度保守估算：少一个分组或没有套餐名/提示行，就多列几个流量包
-  const maxRows = (view.message ? 2 : 3) + (groups.length < 2 ? 2 : 0) + (view.packageName ? 0 : 1);
-  const pkgs = view.packages.slice(0, maxRows);
-  const more = view.packages.length - pkgs.length;
-  const list = pkgs.length
-    ? [
-        col(
-          [
-            row([T('流量包', 11, C.sub, 'medium'), spacer(), ...(more > 0 ? [T('另有 ' + more + ' 项', 10, C.faint)] : [])], 4),
-            ...pkgs.map((p) =>
-              row(
-                [
-                  { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: p.directed ? C.directed : C.general, children: [] },
-                  T(p.name, 11, C.text, 'regular', { flex: 1, minScale: 0.7 }),
-                  T(packageLine(p), 11, C.sub, 'medium', { minScale: 0.7 }),
-                ],
-                6,
-              ),
-            ),
-          ],
-          4,
-        ),
-      ]
-    : [];
-  return rootWidget(
-    [
-      header(view, s),
-      ...(view.packageName ? [T(view.packageName, 11, C.sub)] : []),
-      row([capsule(view.fee, '话费', feeValueColor(view)), capsule(view.voice, '语音'), capsule(view.flow, '流量')], 8, { alignItems: 'start' }),
-      ...(groups.length ? groups.map(({ def, g }) => groupBlock(def, g, s)) : [T(view.hasDetail ? '没有流量包' : '流量明细暂不可用', 11, C.sub)]),
-      spacer(),
-      ...list,
-      ...footer(view, 11),
-    ],
-    { padding: [14, 16, 14, 16], gap: 7 },
-  );
+  const tiles = tilesFor(view, 3);
+  if (!tiles.length) return messageView(view, '暂无数据', 'systemLarge');
+  // 按小屏 iPhone 大号（内容区约 292pt 高）估算能放下几行流量包
+  const maxRows = 3 + (view.packageName ? 0 : 1) - (view.message ? 1 : 0);
+  return rootWidget([
+    header(view, 14, false),
+    ...(view.packageName ? [spacer(2), T(view.packageName, 12, C.tertiary)] : []),
+    spacer(14),
+    row(tiles.map((t) => tile(t, LARGE)), 16, { alignItems: 'start' }),
+    spacer(),
+    ...(view.packages.length ? [packageCard(view, maxRows)] : []),
+    ...(view.message ? [spacer(8), T(view.message, 12, view.tone === 'normal' ? C.secondary : toneColor(view.tone), 'regular', { minScale: 0.6 })] : []),
+  ]);
 }
 
-function lockRoot(children, family) {
+/* ---------- 锁屏 ---------- */
+// 锁屏小组件由系统按亮度做半透明渲染：白色最清楚，用透明度区分层级
+const L = { text: '#FFFFFF', secondary: '#FFFFFFB3', track: '#FFFFFF40' };
+
+function lockBar(ratio) {
+  const r = Math.max(0, Math.min(1000, Math.round(ratio * 1000)));
+  const children = r <= 0 ? [spacer()] : [{ type: 'stack', flex: r, height: 3, borderRadius: 1.5, backgroundColor: L.text, children: [] }, ...(r < 1000 ? [{ type: 'spacer', flex: 1000 - r }] : [])];
+  return { type: 'stack', direction: 'row', height: 3, borderRadius: 1.5, backgroundColor: L.track, children };
+}
+
+function lockAmount(value, unit) {
+  return row([T(value, 18, L.text, 'semibold', { minScale: 0.5 }), ...(unit ? [T(unit, 11, L.secondary, 'regular', { minScale: 0.8 })] : [])], 2, { alignItems: 'end' });
+}
+
+function lockRoot(children, family, extra) {
   return {
     type: 'widget',
     padding: family === 'accessoryInline' ? 0 : 2,
-    gap: 1,
+    gap: 2,
     refreshAfter: new Date(Date.now() + REFRESH_MS).toISOString(),
     children,
+    ...(extra || {}),
   };
 }
 
-function shortFee(view) {
-  return view.fee ? '话费 ' + view.fee.value + view.fee.unit : '';
+// 圆形锁屏的进度环（内联 SVG，按剩余比例画弧）
+function ringImage(ratio) {
+  const r = 44;
+  const len = (2 * Math.PI * r * Math.max(0, Math.min(1, ratio))).toFixed(2);
+  return (
+    "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+    "<circle cx='50' cy='50' r='44' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='7'/>" +
+    "<circle cx='50' cy='50' r='44' fill='none' stroke='rgb(255,255,255)' stroke-width='7' stroke-linecap='round' " +
+    "stroke-dasharray='" + len + " 400' transform='rotate(-90 50 50)'/></svg>"
+  );
 }
 
-function shortGroup(label, g) {
-  if (!g) return '';
-  if (g.kind === 'limited') return label + '剩 ' + flowText(g.remain);
-  if (g.kind === 'unlimited') return label + '不限';
-  return label + '已用 ' + flowText(g.used);
+function centered(node) {
+  return row([spacer(), node, spacer()]);
+}
+
+function shortValue(x) {
+  return x.value.v + (x.value.u ? ' ' + x.value.u : '');
 }
 
 function buildLock(view, family) {
+  const hero = heroFor(view);
+  const danger = view.tone === 'danger';
   if (family === 'accessoryInline') {
-    const parts = view.tone === 'danger' ? ['联通需重新登录'] : [shortFee(view), shortGroup('通用', view.general) || (view.flow ? view.flow.title + ' ' + view.flow.value + view.flow.unit : '')];
-    return lockRoot([T(parts.filter(Boolean).join(' · ') || view.title, 12, C.text, 'medium', { minScale: 0.5 })], family);
+    let text = view.title;
+    if (danger) text = '联通需重新登录';
+    else if (hero) {
+      const g = view.general;
+      const parts = [view.fee ? '话费 ' + view.fee.value + view.fee.unit : ''];
+      if (g && g.kind === 'limited') parts.push('通用剩 ' + g.remain.v + g.remain.u);
+      else if (hero.key !== 'fee') parts.push(hero.short + ' ' + hero.value.v + hero.value.u);
+      text = parts.filter(Boolean).join(' · ') || text;
+    }
+    return lockRoot([T(text, 12, L.text, 'regular', { minScale: 0.5 })], family);
   }
   if (family === 'accessoryCircular') {
-    const g = view.general;
-    let label = '话费';
-    let main = view.fee ? { v: view.fee.value, u: view.fee.unit } : { v: '--', u: '' };
-    if (g && g.kind === 'limited') {
-      label = '通用';
-      main = g.remain;
-    }
+    if (!hero) return lockRoot([spacer(), centered(T('联通', 12, L.text, 'semibold')), spacer()], family);
     return lockRoot(
       [
         spacer(),
-        row([spacer(), T(label, 9, C.sub, 'medium'), spacer()]),
-        row([spacer(), T(main.v, 15, C.text, 'bold', { minScale: 0.5 }), spacer()]),
-        ...(main.u ? [row([spacer(), T(main.u, 9, C.sub, 'medium'), spacer()])] : []),
+        centered(T(hero.short, 9, L.secondary)),
+        centered(T(hero.value.v, 16, L.text, 'semibold', { minScale: 0.5 })),
+        ...(hero.value.u ? [centered(T(hero.value.u, 9, L.secondary))] : []),
         spacer(),
       ],
       family,
+      { padding: 6, gap: 0, ...(hero.ratio !== null ? { backgroundImage: ringImage(hero.ratio) } : {}) },
     );
   }
-  const line2 = [view.fee ? view.fee.value + view.fee.unit : '', view.voice ? '语音 ' + view.voice.value + view.voice.unit : ''].filter(Boolean).join(' · ');
-  const line3 = [shortGroup('通用', view.general), shortGroup('定向', view.directed)].filter(Boolean).join(' · ') ||
-    (view.flow ? view.flow.title + ' ' + view.flow.value + view.flow.unit : '');
+  if (!hero) return lockRoot([T(view.title, 13, L.text, 'semibold'), T('暂无数据', 12, L.secondary)], family);
+  const extras = extrasFor(view, hero, 2);
+  const line = danger ? '登录已失效，请打开联通 App' : extras.map((x) => x.label + ' ' + shortValue(x)).join(' · ');
   return lockRoot(
     [
-      row([icon('simcard.fill', 11, C.text), T(view.title, 12, C.text, 'semibold'), spacer(), T(view.tone === 'danger' ? '需登录' : view.time, 10, C.sub)], 3),
-      T(line2 || '话费 --', 12, C.text, 'medium'),
-      T(view.tone === 'danger' ? '登录失效，请打开联通 App' : line3 || '流量 --', 11, C.sub, 'medium'),
+      row([T(hero.label, 12, L.text, 'semibold'), spacer(), T(danger ? '需登录' : view.timeShort, 11, L.secondary)], 4),
+      lockAmount(hero.value.v, hero.value.u),
+      ...(hero.ratio !== null ? [lockBar(hero.ratio)] : []),
+      T(line || ' ', 11, L.secondary, 'regular', { minScale: 0.6 }),
     ],
     family,
   );
 }
 
+/* ---------- 引导与提示 ---------- */
+
+function messageView(view, message, family) {
+  return messageLayout(view.title, message, view.tone === 'danger' ? 'danger' : 'normal', family);
+}
+
+function messageLayout(title, message, tone, family, note) {
+  if (family === 'accessoryCircular') {
+    return lockRoot([spacer(), centered(T('联通', 13, L.text, 'semibold')), centered(T(tone === 'danger' ? '需登录' : '未就绪', 10, L.secondary)), spacer()], family, {
+      padding: 6,
+      gap: 1,
+    });
+  }
+  if (family.startsWith('accessory')) {
+    return lockRoot([T(title + ' · ' + message, 11, L.text, 'regular', { maxLines: 2, minScale: 0.5 })], family);
+  }
+  const small = family === 'systemSmall';
+  return rootWidget([
+    T(title, 13, C.text, 'semibold'),
+    spacer(),
+    T(message, small ? 15 : 17, tone === 'danger' ? C.danger : C.text, 'semibold', { maxLines: 2, minScale: 0.7 }),
+    ...(note ? [spacer(4), T(note, 12, C.secondary, 'regular', { maxLines: 3, minScale: 0.7 })] : []),
+  ]);
+}
+
 function messageWidget(ctx, message, tone, family) {
   const fam = family || (ctx && ctx.widgetFamily) || 'systemMedium';
   const title = safeTitle(ctx && ctx.env && ctx.env.TITLE) || '中国联通';
-  const color = tone === 'danger' ? C.danger : C.sub;
-  if (fam.startsWith('accessory')) {
-    return lockRoot([T(fam === 'accessoryCircular' ? '联通' : title + ' · ' + message, 11, C.text, 'medium', { maxLines: 2, minScale: 0.5 })], fam);
-  }
-  return rootWidget([
-    row([icon('simcard.fill', 14, C.brand), T(title, 14, C.text, 'semibold')], 4),
-    spacer(),
-    T(message, 12, color, 'medium', { maxLines: 3, minScale: 0.7 }),
-    spacer(),
-  ]);
+  return messageLayout(title, message, tone, fam);
 }
 
 function setupWidget(ctx, family) {
   const fam = family || 'systemMedium';
-  if (fam.startsWith('accessory')) return messageWidget(ctx, '打开联通 App 获取登录信息', 'normal', fam);
-  const small = fam === 'systemSmall';
   const title = safeTitle(ctx && ctx.env && ctx.env.TITLE) || '中国联通';
-  return rootWidget([
-    row([icon('simcard.fill', 14, C.brand), T(title, 14, C.text, 'semibold')], 4),
-    spacer(),
-    T('还没有登录信息', small ? 13 : 15, C.text, 'semibold'),
-    T(small ? '打开联通 App 首页，等通知提示已获取' : '打开联通 App 首页查一次余额，收到「已获取登录信息」通知即可', 11, C.sub, 'regular', { maxLines: 3, minScale: 0.7 }),
-    T('需开启 MITM 并信任证书', 10, C.faint, 'regular', { maxLines: 2 }),
-    spacer(),
-  ]);
+  if (fam.startsWith('accessory')) return messageLayout(title, '打开联通 App 获取登录信息', 'normal', fam);
+  const note =
+    fam === 'systemSmall'
+      ? '打开联通 App 首页查一次余额'
+      : '打开联通 App 首页查一次余额，收到「登录信息已就绪」通知即可。需开启 MITM 并信任证书。';
+  return messageLayout(title, '还没有登录信息', 'normal', fam, note);
 }
 
 async function renderWidget(ctx) {
