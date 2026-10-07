@@ -245,6 +245,25 @@ test('正常查询：各尺寸 DSL 合法，数值和分组正确', async () => 
   }
 });
 
+// Egern 实机：行里有带 flex 的子元素时，这一行会吃掉剩余高度，弹性 spacer 分不到空间，内容被挤到顶部
+function flexRowsWithoutHeight(node, path = 'root', out = []) {
+  const kids = node.children || [];
+  if (node.type === 'stack' && (node.direction || 'row') === 'row' && !node.height && kids.some((k) => k.flex && k.type !== 'spacer')) out.push(path);
+  kids.forEach((k, i) => flexRowsWithoutHeight(k, path + '.' + i, out));
+  return out;
+}
+
+test('含 flex 子元素的行都固定了高度，内容不会被挤到顶部', async () => {
+  const routes = [happyRoute, (m, u) => (u.includes('queryUserInfoSeven') ? { body: summaryBody() } : { status: 502, body: 'x' })];
+  for (const route of routes) {
+    for (const family of FAMILIES) {
+      const { ctx } = makeCtx({ storage: authStore(), family, route });
+      const w = validateDSL(await run(ctx));
+      assert.deepEqual(flexRowsWithoutHeight(w), [], family);
+    }
+  }
+});
+
 test('5 分钟内的完整缓存直接使用，不重复请求', async () => {
   const storage = authStore();
   await run(makeCtx({ storage, family: 'systemMedium', route: happyRoute }).ctx);

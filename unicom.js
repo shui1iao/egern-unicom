@@ -823,11 +823,28 @@ function ratioColor(ratio, base) {
   return base;
 }
 
+// Egern 实机排版：一行里只要有带 flex 的子元素，这一行就会吃掉父容器剩下的全部高度，
+// 内容贴着顶部，弹性 spacer 分不到空间。所以这类行必须指定 height。
+// 高度按 iPhone 实测行高估算：含中文的系统字体一行约 1.22 倍字号。
+const LINE = 1.22;
+
+function lineH(size) {
+  return size * LINE;
+}
+
+function unitLift(size, unitSize) {
+  return Math.max(0, Math.round((size - unitSize) * 0.2));
+}
+
+function amountH(size, unitSize) {
+  return Math.max(lineH(size), lineH(unitSize) + unitLift(size, unitSize));
+}
+
 // 数字 + 单位：底部对齐，单位按字号差补偿下沉，看起来落在同一基线上
 function amount(value, unit, size, color, unitSize) {
   const children = [T(value, size, color || C.text, 'semibold', { minScale: 0.5 })];
   if (unit) {
-    const lift = Math.max(0, Math.round((size - unitSize) * 0.2));
+    const lift = unitLift(size, unitSize);
     children.push({ type: 'stack', padding: [0, 0, lift, 0], children: [T(unit, unitSize, C.secondary, 'regular', { minScale: 0.8 })] });
   }
   return row(children, Math.max(2, Math.round(size / 8)), { alignItems: 'end' });
@@ -945,20 +962,30 @@ function header(view, size, compact, narrow) {
   );
 }
 
-function tile(t, s) {
-  return col(
-    [
-      T(t.label, s.label, C.secondary),
-      spacer(s.labelGap),
-      amount(t.value.v, t.value.u, s.value, t.valueColor || C.text, s.unit),
-      spacer(s.barGap),
-      bar(t.ratio, t.color || C.accent, s.bar),
-      spacer(s.barGap),
-      ...t.lines.map((line) => T(line || ' ', s.caption, C.tertiary, 'regular', { minScale: 0.7 })),
-    ],
-    s.lineGap,
-    { flex: 1 },
-  );
+// full=false 时只有标签和数字（几列都没有比例条和说明时，不留空行）
+function tile(t, s, full) {
+  const head = [T(t.label, s.label, C.secondary), spacer(s.labelGap), amount(t.value.v, t.value.u, s.value, t.valueColor || C.text, s.unit)];
+  const tail = full
+    ? [
+        spacer(s.barGap),
+        bar(t.ratio, t.color || C.accent, s.bar),
+        spacer(s.barGap),
+        ...t.lines.map((line) => T(line || ' ', s.caption, C.tertiary, 'regular', { minScale: 0.7 })),
+      ]
+    : [];
+  return col(head.concat(tail), s.lineGap, { flex: 1 });
+}
+
+// tile 的内容高度：标签、数字（、比例条、两行说明）加子元素之间的间距，再留 2pt 余量
+function tileHeight(s, full) {
+  const head = lineH(s.label) + s.labelGap + amountH(s.value, s.unit) + s.lineGap * 2;
+  const tail = full ? s.barGap * 2 + s.bar + lineH(s.caption) * 2 + s.lineGap * 5 : 0;
+  return Math.ceil(head + tail) + 2;
+}
+
+function tileRow(tiles, s, gap) {
+  const full = tiles.some((t) => t.ratio !== null || t.lines.some(Boolean));
+  return row(tiles.map((t) => tile(t, s, full)), gap, { alignItems: 'start', height: tileHeight(s, full) });
 }
 
 function rootWidget(children, extra) {
@@ -990,7 +1017,7 @@ function buildSmall(view) {
       row(
         extras.map((x) => col([T(x.label, 11, C.secondary), amount(x.value.v, x.value.u, 14, x.valueColor || C.text, 11)], 1, { flex: 1 })),
         10,
-        { alignItems: 'start' },
+        { alignItems: 'start', height: Math.ceil(lineH(11) + 1 + amountH(14, 11)) + 2 },
       ),
     ],
     { padding: [15, 16, 15, 16] },
@@ -1003,7 +1030,7 @@ const LARGE = { label: 12, labelGap: 2, value: 26, unit: 13, barGap: 8, bar: 5, 
 function buildMedium(view) {
   const tiles = tilesFor(view, 3);
   if (!tiles.length) return messageView(view, '暂无数据', 'systemMedium');
-  return rootWidget([header(view, 13, true), spacer(), row(tiles.map((t) => tile(t, MEDIUM)), 14, { alignItems: 'start' })], {
+  return rootWidget([header(view, 13, true), spacer(), tileRow(tiles, MEDIUM, 14)], {
     padding: [15, 16, 15, 16],
   });
 }
@@ -1022,6 +1049,7 @@ function packageCard(view, maxRows) {
             T(packageLine(p), 12, C.secondary, 'regular', { minScale: 0.7 }),
           ],
           8,
+          { height: Math.ceil(lineH(13)) + 1 },
         ),
       ),
     ],
@@ -1035,11 +1063,13 @@ function buildLarge(view) {
   if (!tiles.length) return messageView(view, '暂无数据', 'systemLarge');
   // 按小屏 iPhone 大号（内容区约 292pt 高）估算能放下几行流量包
   const maxRows = 3 + (view.packageName ? 0 : 1) - (view.message ? 1 : 0);
+  // 没有流量包列表时，把三列放在中间，避免下半部空着
+  const top = view.packages.length ? spacer(14) : spacer();
   return rootWidget([
     header(view, 14, false),
     ...(view.packageName ? [spacer(2), T(view.packageName, 12, C.tertiary)] : []),
-    spacer(14),
-    row(tiles.map((t) => tile(t, LARGE)), 16, { alignItems: 'start' }),
+    top,
+    tileRow(tiles, LARGE, 16),
     spacer(),
     ...(view.packages.length ? [packageCard(view, maxRows)] : []),
     ...(view.message ? [spacer(8), T(view.message, 12, view.tone === 'normal' ? C.secondary : toneColor(view.tone), 'regular', { minScale: 0.6 })] : []),
