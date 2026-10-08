@@ -65,7 +65,7 @@ function findText(node, text) {
 }
 
 // 从圆环 SVG 里读出剩余比例（弧长 / 周长；画满一圈是 1，只有底环是 0）
-const RING_RGB = { fee: '240,40,52', flow: '47,128,255', voice: '255,138,26' };
+const RING_RGB = { fee: '215,0,15', flow: '18,166,228', voice: '248,101,39' };
 function ringNodes(node, out = []) {
   if (typeof node.backgroundImage === 'string' && node.backgroundImage.startsWith('data:image/svg+xml')) out.push(node.backgroundImage);
   (node.children || []).forEach((c) => ringNodes(c, out));
@@ -228,15 +228,21 @@ test('正常查询：各尺寸 DSL 合法，数值和分组正确', async () => 
 
     // 流量不分通用/定向：剩余 12800+10240 MB = 22.5GB；语音 120 分钟
     assert.doesNotMatch(all, /中国联通|通用|定向|尾号|18612345678/);
-    if (family.startsWith('system')) {
-      // 只显示数字：话费、语音靠图标区分，不写「元」「分钟」；流量要写 GB
-      assert.match(all, /45\.67/);
-      assert.match(all, /22\.5\|GB/);
-      assert.match(all, /\b120\b/);
-      assert.doesNotMatch(all, /元|分钟|剩余/);
-      // 流量环：剩余 23040 / 总量 51200 = 45%；语音环：120 / 200 = 60%
+    if (family === 'systemSmall') {
+      // 三行横条：名称在上，剩余量和单位在下
+      assert.match(all, /剩余话费\|45\.67\|元\|剩余流量\|22\.5\|GB\|剩余语音\|120\|分钟/);
+    } else if (family.startsWith('system')) {
+      // 每项都有剩余量、单位和名称（大号的话费是横条：名称在上）
+      assert.match(all, family === 'systemMedium' ? /45\.67\|元\|剩余话费/ : /剩余话费\|45\.67\|元/);
+      assert.match(all, /22\.5\|GB\|剩余流量/);
+      assert.match(all, /120\|分钟\|剩余语音/);
+    }
+    if (family !== 'systemSmall' && family.startsWith('system')) {
+      // 流量环：剩余 23040 / 总量 51200 = 45%；语音环：120 / 200 = 60%，圈里写百分比
       assert.ok(ringRatio(w, 'flow') > 0.44 && ringRatio(w, 'flow') < 0.46, family + ' flow ring');
       assert.ok(ringRatio(w, 'voice') > 0.59 && ringRatio(w, 'voice') < 0.61, family + ' voice ring');
+      assert.match(all, /45\|%/);
+      assert.match(all, /60\|%/);
     }
     if (family === 'accessoryInline') assert.match(all, /¥45\.67 · 22\.5GB · 120分钟/);
     if (family === 'accessoryRectangular') assert.match(all, /45\.67\|22\.5\|GB\|120/);
@@ -442,9 +448,10 @@ test('只有明细接口失败：话费正常显示，并提示明细失败', as
   const all = texts(w).join('|');
   assert.match(all, /45\.67/);
   assert.ok(hasWarnIcon(w));
-  assert.match(all, /12\.5\|GB/); // 退回汇总接口的流量总数
-  assert.equal(ringRatio(w, 'flow'), 1); // 没有总量：画满一圈
+  assert.match(all, /12\.5\|GB\|剩余流量/); // 退回汇总接口的流量总数（标题里的「通用」去掉）
+  assert.equal(ringRatio(w, 'flow'), 1); // 没有总量：画满一圈，不写百分比
   assert.equal(ringRatio(w, 'voice'), 1);
+  assert.doesNotMatch(all, /%/);
 });
 
 test('联通维护等业务错误码：不当成登录失效', async () => {
@@ -499,13 +506,13 @@ test('存储损坏时也能渲染', async () => {
   }
 });
 
-test('话费提醒线：低于提醒线时话费数字和圆环变红', async () => {
+test('话费提醒线：低于提醒线时话费数字变红并提示余额不足', async () => {
   const storage = authStore();
   const { ctx } = makeCtx({ storage, family: 'systemMedium', route: happyRoute, env: { LOW_FEE: '50' } });
   const w = validateDSL(await run(ctx));
   const fee = findText(w, '45.67');
   assert.ok(fee && fee.textColor.light === '#FF3B30', '话费低于 50 元应标红');
-  assert.ok(ringNodes(w).some((x) => x.includes("stroke='rgb(255,59,48)'")), '话费圆环应变红');
+  assert.ok(findText(w, '余额不足'));
   const normal = makeCtx({ storage: authStore(), family: 'systemMedium', route: happyRoute });
-  assert.equal(findText(validateDSL(await run(normal.ctx)), '45.67').textColor.light, '#1D1D1F');
+  assert.equal(findText(validateDSL(await run(normal.ctx)), '45.67').textColor.light, '#D7000F');
 });

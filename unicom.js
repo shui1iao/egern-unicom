@@ -789,10 +789,10 @@ function buildView(ctx, loaded) {
 }
 
 /* ============================== 渲染 ============================== */
-// 极简：没有标题，只有三个大圆环——话费（红）、流量（蓝）、语音（橙）。
-// 圆环里是图标和剩余量，圆环下面是单位；靠图标和颜色区分，不写名称。
-// 流量和语音按剩余占总量画进度；话费没有总量，画满一圈（余额低于提醒线时变红色警示）。
-// 圆环是内联 SVG 背景图，SVG 里只能用一种颜色，所以圆环颜色选深浅背景上都清楚的中间色。
+// 布局参照 anker1209/Scriptable 的中国联通小组件（https://github.com/anker1209/Scriptable）：
+// 话费红 #D7000F、流量蓝 #12A6E4、语音橙 #F86527；每项一块同色淡渐变底的圆角格，
+// 流量、语音用圆环表示剩余比例（圈里是图标和百分比），下面是剩余量和名称；话费格放 ¥ 图标和更新时间。
+// 小号是三行横条：左边名称和剩余量，右边图标。显示代码按 Egern 小组件 DSL 重新实现。
 
 const C = {
   bg: { light: '#FFFFFF', dark: '#1C1C1E' },
@@ -802,15 +802,22 @@ const C = {
   danger: { light: '#FF3B30', dark: '#FF453A' },
 };
 
-// tint：图标和文字的颜色（深浅各一）；ring：圆环颜色（SVG 用，rgb 三元组）
+// hex：浅色模式和渐变用的颜色；dark：深色模式下的文字颜色（略提亮）；rgb：圆环 SVG 用
 const THEME = {
-  fee: { tint: { light: '#E60012', dark: '#FF5A62' }, ring: '240,40,52', symbol: 'yensign' },
-  flow: { tint: { light: '#1677FF', dark: '#4D9CFF' }, ring: '47,128,255', symbol: 'antenna.radiowaves.left.and.right' },
-  voice: { tint: { light: '#F07800', dark: '#FFA040' }, ring: '255,138,26', symbol: 'phone.fill' },
+  fee: { hex: '#D7000F', dark: '#FF4D57', rgb: '215,0,15', symbol: 'yensign.circle.fill' },
+  flow: { hex: '#12A6E4', dark: '#3CB8F0', rgb: '18,166,228', symbol: 'antenna.radiowaves.left.and.right' },
+  voice: { hex: '#F86527', dark: '#FF8A4F', rgb: '248,101,39', symbol: 'phone.fill' },
 };
 
 const RING_WARN = '255,149,0';
 const RING_DANGER = '255,59,48';
+
+// 主题色（可带透明度，两位十六进制，如 'B3' = 70%）
+function tint(key, alpha) {
+  const t = THEME[key];
+  const a = alpha || '';
+  return { light: t.hex + a, dark: t.dark + a };
+}
 
 function T(text, size, color, weight, extra) {
   return {
@@ -856,6 +863,18 @@ function lineH(size) {
   return size * LINE;
 }
 
+function unitLift(size, unitSize) {
+  return Math.max(0, Math.round((size - unitSize) * 0.2));
+}
+
+// 淡渐变底：横条从左往右变淡，竖格从上往下变深
+function wash(key, vertical) {
+  const hex = THEME[key].hex;
+  return vertical
+    ? { type: 'linear', colors: [hex + '08', hex + '1A'], stops: [0, 1], startPoint: { x: 0, y: 0 }, endPoint: { x: 0, y: 1 } }
+    : { type: 'linear', colors: [hex + '1A', hex + '08'], stops: [0, 1], startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 0 } };
+}
+
 /* ---------- 圆环 ---------- */
 
 function ringRGB(ratio, base) {
@@ -865,11 +884,11 @@ function ringRGB(ratio, base) {
   return base;
 }
 
-// 圆形进度条（SVG）：浅色底环 + 从 12 点钟方向顺时针的剩余弧
+// 圆形进度条（SVG）：20% 透明度的底环 + 从 12 点钟方向顺时针的剩余弧
 function ringSvg(ratio, rgb, stroke) {
   const W = stroke;
   const R = 50 - W / 2 - 0.5;
-  const track = "<circle cx='50' cy='50' r='" + R + "' fill='none' stroke='rgba(" + rgb + ",0.18)' stroke-width='" + W + "'/>";
+  const track = "<circle cx='50' cy='50' r='" + R + "' fill='none' stroke='rgba(" + rgb + ",0.2)' stroke-width='" + W + "'/>";
   let arc = '';
   if (ratio > 0) {
     const r = Math.min(1, ratio);
@@ -883,45 +902,46 @@ function ringSvg(ratio, rgb, stroke) {
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" + track + arc + '</svg>';
 }
 
-/* ---------- 三项内容 ---------- */
-
-function ratioOrBase(ratio, base) {
-  return ratio === null || ratio === undefined ? base : ringRGB(ratio, base);
+function pctText(ratio) {
+  const p = Math.round(ratio * 100);
+  if (ratio > 0 && p < 1) return '<1';
+  if (ratio < 1 && p > 99) return '99';
+  return String(p);
 }
+
+/* ---------- 三项内容 ---------- */
 
 function feeItem(view) {
   const fee = view.fee;
   return {
     key: 'fee',
+    title: view.feeLow ? '余额不足' : fee ? fee.title : '剩余话费',
     value: fee ? fee.value : '--',
     unit: fee ? fee.unit : '',
-    // 话费没有总量：画满一圈；低于提醒线时整圈变红并把数字标红
-    ratio: fee ? 1 : 0,
-    ring: view.feeLow ? RING_DANGER : THEME.fee.ring,
-    valueColor: view.feeLow ? C.danger : fee ? C.text : C.secondary,
+    low: view.feeLow,
   };
 }
 
 function flowItem(view) {
   const g = view.flowGroup;
-  if (g && g.kind === 'limited') return { key: 'flow', value: g.remain.v, unit: g.remain.u, ratio: g.ratio, ring: ringRGB(g.ratio, THEME.flow.ring) };
-  if (g && g.kind === 'unlimited') return { key: 'flow', value: '不限', unit: '', ratio: 1, ring: THEME.flow.ring };
-  if (view.flow) return { key: 'flow', value: view.flow.value, unit: view.flow.unit, ratio: 1, ring: THEME.flow.ring };
-  if (g) return { key: 'flow', value: g.used.v, unit: '已用' + g.used.u, ratio: 0, ring: THEME.flow.ring };
-  return { key: 'flow', value: '--', unit: '', ratio: 0, ring: THEME.flow.ring, valueColor: C.secondary };
+  if (g && g.kind === 'limited') return { key: 'flow', title: '剩余流量', value: g.remain.v, unit: g.remain.u, ratio: g.ratio, known: true };
+  if (g && g.kind === 'unlimited') return { key: 'flow', title: '已用流量', value: g.used.v, unit: g.used.u + ' · 不限', ratio: 1, known: false };
+  if (view.flow) return { key: 'flow', title: view.flow.title.replace(/通用/g, '') || '剩余流量', value: view.flow.value, unit: view.flow.unit, ratio: 1, known: false };
+  if (g) return { key: 'flow', title: '已用流量', value: g.used.v, unit: g.used.u, ratio: 1, known: false };
+  return { key: 'flow', title: '剩余流量', value: '--', unit: '', ratio: 0, known: false };
 }
 
 function voiceItem(view) {
   const v = view.voice;
-  const ratio = view.voiceRatio;
+  const known = v && view.voiceRatio !== null && view.voiceRatio !== undefined;
   return {
     key: 'voice',
+    title: v ? v.title : '剩余语音',
     value: v ? v.value : '--',
     unit: v ? v.unit : '',
-    // 没有语音包总量时画满一圈
-    ratio: v ? (ratio === null ? 1 : ratio) : 0,
-    ring: ratioOrBase(ratio, THEME.voice.ring),
-    valueColor: v ? C.text : C.secondary,
+    // 拿不到语音包总量时画满一圈，不显示百分比
+    ratio: known ? view.voiceRatio : v ? 1 : 0,
+    known: !!known,
   };
 }
 
@@ -929,47 +949,82 @@ function itemsFor(view) {
   return [feeItem(view), flowItem(view), voiceItem(view)];
 }
 
-// 话费（¥ 图标）和语音（电话图标）的单位不写；流量的 GB/MB 要写
+// 锁屏上话费、语音靠图标区分，不写「元」「分钟」
 function shownUnit(item) {
   if (item.key === 'fee' && item.unit === '元') return '';
   if (item.key === 'voice' && item.unit === '分钟') return '';
   return item.unit;
 }
 
-// 一个圆环：图标在上、剩余量在正中、单位在下（没有单位时留空，保证几个圆环的数字对齐）
-function ringBlock(item, s) {
-  const p = THEME[item.key];
-  const unit = shownUnit(item);
-  const edge = Math.ceil(Math.max(s.icon, lineH(s.unit)));
+/* ---------- 公共部件 ---------- */
+
+// 剩余量：数字 + 单位，单位按字号差补偿下沉，看起来落在同一基线上
+function valueRow(item, size, unitSize) {
+  const color = item.low ? C.danger : item.value === '--' ? C.secondary : tint(item.key);
+  const children = [T(item.value, size, color, 'semibold', { minScale: 0.5 })];
+  if (item.unit) {
+    children.push({ type: 'stack', padding: [0, 0, unitLift(size, unitSize), 0], children: [T(item.unit, unitSize, tint(item.key, 'B3'), 'semibold', { minScale: 0.6 })] });
+  }
+  return row(children, 2, { alignItems: 'end' });
+}
+
+function titleText(item, size) {
+  return T(item.title, size, item.low ? C.danger : tint(item.key, '99'), 'medium', { minScale: 0.7 });
+}
+
+// 更新时间；异常时换成警示图标 + 状态（如「需登录」、旧数据的时间）
+function statusRow(view, size) {
+  if (view.status || view.tone !== 'normal') {
+    const color = toneColor(view.tone);
+    return row(
+      [...(view.tone === 'normal' ? [] : [icon('exclamationmark.triangle.fill', size, color)]), ...(view.status ? [T(view.status, size, color, 'medium', { minScale: 0.6 })] : [])],
+      3,
+    );
+  }
+  const color = tint('fee', '99');
+  return row([icon('arrow.triangle.2.circlepath', size - 1, color), T(view.time, size, color, 'medium', { minScale: 0.6 })], 3);
+}
+
+// 圆环：圈里是图标和剩余百分比；没有比例时只放图标
+function ringFace(item, s) {
+  const inner = item.known
+    ? [
+        spacer(),
+        centered(icon(THEME[item.key].symbol, s.ringIcon, tint(item.key, 'B3'))),
+        spacer(1),
+        centered(T(pctText(item.ratio), s.pct, tint(item.key), 'medium', { minScale: 0.6 })),
+        centered(T('%', s.pctUnit, tint(item.key, '80'), 'bold', { minScale: 1 })),
+        spacer(),
+      ]
+    : [spacer(), centered(icon(THEME[item.key].symbol, Math.round(s.ringIcon * 1.6), tint(item.key))), spacer()];
   return {
     type: 'stack',
     direction: 'column',
     alignItems: 'center',
     width: s.ring,
     height: s.ring,
-    padding: [0, s.inset, 0, s.inset],
-    backgroundImage: ringSvg(item.ratio, item.ring, s.stroke),
-    children: [
-      spacer(),
-      row([spacer(), icon(p.symbol, s.icon, p.tint), spacer()], 0, { height: edge }),
-      row([spacer(), T(item.value, s.value, item.valueColor || C.text, 'semibold', { minScale: 0.45 }), spacer()], 0, { height: Math.ceil(lineH(s.value)) }),
-      row(unit ? [spacer(), T(unit, s.unit, C.secondary, 'regular', { minScale: 0.6 }), spacer()] : [], 0, { height: edge }),
-      spacer(),
-    ],
+    backgroundImage: ringSvg(item.ratio, item.known ? ringRGB(item.ratio, THEME[item.key].rgb) : THEME[item.key].rgb, s.stroke),
+    children: inner,
   };
 }
 
-// 异常状态：一个小警示图标加很短的文字（如「需登录」或旧数据的时间），正常时不显示
-function statusBadge(view, size, short) {
-  if (!view.status && view.tone === 'normal') return null;
-  const color = toneColor(view.tone);
-  let text = view.status;
-  if (short && text.includes(' ')) text = text.split(' ')[0];
-  const parts = [
-    ...(view.tone === 'normal' ? [] : [icon('exclamationmark.triangle.fill', size, color)]),
-    ...(text ? [T(text, size, color, 'medium', { minScale: 0.6 })] : []),
-  ];
-  return short ? col(parts.map((x) => centered(x)), 1, { alignItems: 'center' }) : row(parts, 3, { height: Math.ceil(lineH(size)) });
+// 话费格的上半部分：和圆环一样高，放 ¥ 图标和更新时间
+function feeFace(view, s) {
+  return col(
+    [spacer(), centered(icon(THEME.fee.symbol, s.logo, tint('fee'))), spacer(6), centered(statusRow(view, s.status)), spacer()],
+    0,
+    { alignItems: 'center', width: s.ring + 24, height: s.ring },
+  );
+}
+
+// 竖格（中号、大号）：上面是圆环或 ¥ 图标，下面是剩余量和名称
+function cell(view, item, s, height) {
+  const face = item.key === 'fee' ? feeFace(view, s) : ringFace(item, s);
+  return col(
+    [spacer(), centered(face), spacer(), centered(valueRow(item, s.value, s.unit)), spacer(3), centered(titleText(item, s.title)), spacer(s.bottom)],
+    0,
+    { flex: 1, height, alignItems: 'center', backgroundGradient: wash(item.key, true), borderRadius: s.radius },
+  );
 }
 
 function rootWidget(children, extra) {
@@ -984,57 +1039,64 @@ function rootWidget(children, extra) {
   };
 }
 
-// 有状态时在右上角显示，底部留同样高度，圆环仍上下居中
-function withStatus(view, size, body) {
-  const badge = statusBadge(view, size, false);
-  if (!badge) return [spacer(), ...body, spacer()];
-  const h = Math.ceil(lineH(size));
-  return [row([spacer(), badge], 0, { height: h }), spacer(), ...body, spacer(), spacer(h)];
-}
-
 /* ---------- 主屏幕 ---------- */
 
-// 小号：上面一个大的流量圆环，下面话费和语音两个小圆环；右上角留一小块放异常状态
-const SMALL_BIG = { ring: 72, stroke: 8, inset: 9, icon: 16, value: 18, unit: 9 };
-const SMALL_MINI = { ring: 50, stroke: 6, inset: 7, icon: 12, value: 11, unit: 8 };
-const CORNER = 30;
+// 小号：三行横条
+const STRIP = { height: 40, pad: [4, 9, 4, 9], title: 10, value: 15, unit: 10, icon: 21, radius: 12, gap: 3 };
+
+function strip(view, item, s) {
+  const top = item.key === 'fee' && (view.status || view.tone !== 'normal') ? statusRow(view, s.title) : titleText(item, s.title);
+  return row([col([top, valueRow(item, s.value, s.unit)], 0), spacer(), icon(THEME[item.key].symbol, s.icon, tint(item.key))], 6, {
+    height: s.height,
+    padding: s.pad,
+    backgroundGradient: wash(item.key, false),
+    borderRadius: s.radius,
+  });
+}
 
 function buildSmall(view) {
-  const [fee, flow, voice] = itemsFor(view);
-  const badge = statusBadge(view, 9, true);
-  const corner = (children) => col(children, 0, { width: CORNER, height: SMALL_BIG.ring, alignItems: 'center' });
-  return rootWidget(
+  const items = itemsFor(view);
+  return rootWidget([spacer(), col(items.map((it) => strip(view, it, STRIP)), STRIP.gap), spacer()]);
+}
+
+// 中号：三个竖格一排
+const MEDIUM = { height: 124, gap: 8, ring: 62, stroke: 10, ringIcon: 12, pct: 12, pctUnit: 8, logo: 32, status: 10, value: 15, unit: 10, title: 10, bottom: 11, radius: 15 };
+
+function buildMedium(view) {
+  const items = itemsFor(view);
+  const line = row(items.map((it) => cell(view, it, MEDIUM, MEDIUM.height)), MEDIUM.gap, { alignItems: 'start', height: MEDIUM.height });
+  return rootWidget([spacer(), line, spacer()]);
+}
+
+// 大号：上面一条话费横条，下面流量、语音两个大圆环格
+const LARGE = { height: 196, gap: 10, ring: 100, stroke: 9, ringIcon: 16, pct: 17, pctUnit: 10, value: 20, unit: 12, title: 12, bottom: 16, radius: 18 };
+const LARGE_FEE = { height: 84, icon: 40, title: 12, value: 26, unit: 13, status: 11, radius: 18 };
+
+function feeBanner(view, item, s) {
+  return row(
     [
+      icon(THEME.fee.symbol, s.icon, tint('fee')),
+      spacer(12),
+      col([titleText(item, s.title), valueRow(item, s.value, s.unit)], 2),
       spacer(),
-      row([corner([]), spacer(), ringBlock(flow, SMALL_BIG), spacer(), corner(badge ? [badge, spacer()] : [])], 0, { alignItems: 'start', height: SMALL_BIG.ring }),
-      spacer(4),
-      row([spacer(), ringBlock(fee, SMALL_MINI), spacer(), ringBlock(voice, SMALL_MINI), spacer()], 0, { height: SMALL_MINI.ring }),
-      spacer(),
+      statusRow(view, s.status),
     ],
-    { padding: 8 },
+    0,
+    { height: s.height, padding: [0, 16, 0, 16], backgroundGradient: wash('fee', false), borderRadius: s.radius },
   );
 }
 
-const MEDIUM = { ring: 92, stroke: 9, inset: 11, icon: 19, value: 22, unit: 11 };
-const LARGE = { ring: 128, stroke: 12, inset: 15, icon: 26, value: 32, unit: 14 };
-
-// 中号：三个圆环一排，等距
-function buildMedium(view) {
-  const [fee, flow, voice] = itemsFor(view);
-  const line = row([spacer(), ringBlock(fee, MEDIUM), spacer(), ringBlock(flow, MEDIUM), spacer(), ringBlock(voice, MEDIUM), spacer()], 0, { height: MEDIUM.ring });
-  return rootWidget(withStatus(view, 10, [line]), { padding: [10, 10, 10, 10] });
-}
-
-// 大号：品字形——上面流量，下面话费和语音
 function buildLarge(view) {
   const [fee, flow, voice] = itemsFor(view);
   return rootWidget(
-    withStatus(view, 12, [
-      row([spacer(), ringBlock(flow, LARGE), spacer()], 0, { height: LARGE.ring }),
-      spacer(12),
-      row([spacer(), ringBlock(fee, LARGE), spacer(), ringBlock(voice, LARGE), spacer()], 0, { height: LARGE.ring }),
-    ]),
-    { padding: [14, 16, 14, 16] },
+    [
+      spacer(),
+      feeBanner(view, fee, LARGE_FEE),
+      spacer(LARGE.gap),
+      row([cell(view, flow, LARGE, LARGE.height), cell(view, voice, LARGE, LARGE.height)], LARGE.gap, { alignItems: 'start', height: LARGE.height }),
+      spacer(),
+    ],
+    { padding: 14 },
   );
 }
 
@@ -1055,26 +1117,14 @@ function lockRoot(children, family, extra) {
 
 // 锁屏圆环（白色）
 function lockRingSvg(ratio) {
-  const R = 44;
-  const W = 7;
-  const track = "<circle cx='50' cy='50' r='" + R + "' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='" + W + "'/>";
-  let arc = '';
-  if (ratio > 0) {
-    const r = Math.min(1, ratio);
-    arc =
-      r >= 0.999
-        ? "<circle cx='50' cy='50' r='" + R + "' fill='none' stroke='rgb(255,255,255)' stroke-width='" + W + "'/>"
-        : "<circle cx='50' cy='50' r='" + R + "' fill='none' stroke='rgb(255,255,255)' stroke-width='" + W + "' stroke-linecap='round' " +
-          "stroke-dasharray='" + (2 * Math.PI * R * r).toFixed(2) + " 400' transform='rotate(-90 50 50)'/>";
-  }
-  return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" + track + arc + '</svg>';
+  return ringSvg(ratio, '255,255,255', 7);
 }
 
 // 单行锁屏：¥话费 · 流量 · 语音，靠符号和单位区分
 function lockPart(item) {
   if (item.value === '--') return '';
   if (item.key === 'fee' && item.unit === '元') return '¥' + item.value;
-  return item.value + (item.unit && !/^已用/.test(item.unit) ? item.unit : '');
+  return item.value + (item.unit && !/不限/.test(item.unit) ? item.unit : '');
 }
 
 function buildLock(view, family) {
@@ -1120,10 +1170,10 @@ function messageLayout(message, tone, family, note) {
     return lockRoot([T('联通 · ' + message, 11, L.text, 'regular', { maxLines: 2, minScale: 0.5 })], family);
   }
   const small = family === 'systemSmall';
-  const color = tone === 'danger' ? C.danger : C.secondary;
+  const color = tone === 'danger' ? C.danger : tint('fee');
   return rootWidget([
     spacer(),
-    centered(icon(tone === 'danger' ? 'exclamationmark.triangle.fill' : 'simcard', small ? 26 : 30, color)),
+    centered(icon(tone === 'danger' ? 'exclamationmark.triangle.fill' : THEME.fee.symbol, small ? 28 : 32, color)),
     spacer(8),
     centered(T(message, small ? 13 : 15, tone === 'danger' ? C.danger : C.text, 'semibold', { maxLines: 2, minScale: 0.7, textAlign: 'center' })),
     ...(note ? [spacer(4), centered(T(note, 11, C.secondary, 'regular', { maxLines: 2, minScale: 0.7, textAlign: 'center' }))] : []),
