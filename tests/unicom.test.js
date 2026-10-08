@@ -229,9 +229,10 @@ test('正常查询：各尺寸 DSL 合法，数值和分组正确', async () => 
       assert.doesNotMatch(all, /国内语音/); // 语音资源不算流量包
     }
     if (family === 'systemSmall') {
-      // 三条：话费、通用、定向
-      assert.match(all, /话费\|45\.67\|元\|通用\|12\.5\|GB\|定向\|10\|GB/);
+      // 话费，下面两行圆环：通用、定向（剩余百分比、剩余量、名称、总量）
+      assert.match(all, /话费\|45\.67\|元\|42%\|12\.5\|GB\|通用\|共 30GB\|50%\|10\|GB\|定向\|共 20GB/);
     }
+    if (family === 'systemMedium') assert.match(all, /42%\|12\.5\|GB\|通用剩余/); // 通用圆环 12800/30720
     if (family === 'systemMedium') assert.match(all, /语音 120 分钟/); // 三列放不下时，语音并入话费列
     if (family === 'accessoryInline') assert.match(all, /话费 45\.67元 · 通用剩 12\.5GB/);
     if (family === 'accessoryRectangular') {
@@ -436,7 +437,7 @@ test('只有明细接口失败：话费正常显示，并提示明细失败', as
   const all = texts(w).join('|');
   assert.match(all, /45\.67/);
   assert.ok(hasWarnIcon(w));
-  assert.match(all, /剩余通用流量\|12\.5\|GB/); // 退回汇总接口的流量总数
+  assert.match(all, /12\.5\|GB\|剩余通用流量/); // 退回汇总接口的流量总数
   const large = makeCtx({ storage, family: 'systemLarge', route(method, url) {
     if (url.includes('queryUserInfoSeven')) return { body: summaryBody() };
     return { status: 502, body: 'bad gateway' };
