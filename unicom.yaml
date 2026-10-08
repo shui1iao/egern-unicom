@@ -1,21 +1,10 @@
 name: 中国联通余量
-description: 话费、语音、通用/定向流量余量小组件。打开联通 App 自动获取登录信息，Cookie 过期自动续登。
+description: 话费、流量、语音余量小组件。打开联通 App 自动获取登录信息，Cookie 过期自动续登。
 author: shui1iao
 icon: simcard.fill
 homepage: https://github.com/shui1iao/egern-unicom
 
 env_schema:
-  TITLE:
-    name: 标题
-    description: 小组件左上角标题，最多 12 个字，留空显示「中国联通」
-    default_value: 中国联通
-  SHOW_PHONE_SUFFIX:
-    name: 显示号码尾号
-    description: 开启后在标题旁显示手机号后四位
-    default_value: "false"
-    options:
-      - "true"
-      - "false"
   LOW_FEE:
     name: 话费提醒线（元）
     description: 话费低于这个数时标红，填 0 关闭
