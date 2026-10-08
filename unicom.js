@@ -995,8 +995,8 @@ function withStatus(view, size, body) {
 /* ---------- 主屏幕 ---------- */
 
 // 小号：上面一个大的流量圆环，下面话费和语音两个小圆环；右上角留一小块放异常状态
-const SMALL_BIG = { ring: 72, stroke: 8, inset: 9, icon: 12, value: 18, unit: 9 };
-const SMALL_MINI = { ring: 50, stroke: 6, inset: 7, icon: 9, value: 11, unit: 8 };
+const SMALL_BIG = { ring: 72, stroke: 8, inset: 9, icon: 16, value: 18, unit: 9 };
+const SMALL_MINI = { ring: 50, stroke: 6, inset: 7, icon: 12, value: 11, unit: 8 };
 const CORNER = 30;
 
 function buildSmall(view) {
@@ -1015,8 +1015,8 @@ function buildSmall(view) {
   );
 }
 
-const MEDIUM = { ring: 92, stroke: 9, inset: 11, icon: 15, value: 22, unit: 11 };
-const LARGE = { ring: 128, stroke: 12, inset: 15, icon: 22, value: 32, unit: 14 };
+const MEDIUM = { ring: 92, stroke: 9, inset: 11, icon: 19, value: 22, unit: 11 };
+const LARGE = { ring: 128, stroke: 12, inset: 15, icon: 26, value: 32, unit: 14 };
 
 // 中号：三个圆环一排，等距
 function buildMedium(view) {
