@@ -763,25 +763,49 @@ function buildView(ctx, loaded) {
 }
 
 /* ============================== 渲染 ============================== */
-// 视觉按 Apple 官网设计规范：中性色为主，唯一强调色是 Apple Blue；字重只用 regular / semibold；
-// 无描边、无渐变、无阴影；卡片圆角 12；层级靠字号和留白区分。红/橙只用于余额不足、查询失败等状态。
+// 三色卡片：话费红、流量蓝（定向紫）、语音橙，每项一张同色浅底圆角卡片。
+// 和常见的联通组件不同：内容左对齐，数字用正文色，流量卡带剩余比例条和已用/总量，标题前是一条红色竖条。
+// 卡片和比例条的底色按背景色预先混合成不透明颜色，深浅色各一套。
+
+function rgbOf(hex) {
+  const n = parseInt(hex.slice(1, 7), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// 把颜色 a 按 t 的比例叠在 b 上
+function mix(a, b, t) {
+  const x = rgbOf(a);
+  const y = rgbOf(b);
+  return '#' + x.map((v, i) => Math.round(v * t + y[i] * (1 - t)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+const BG = { light: '#FFFFFF', dark: '#1C1C1E' };
 
 const C = {
-  bg: { light: '#FFFFFF', dark: '#000000' },
-  card: { light: '#F5F5F7', dark: '#272729' },
+  bg: BG,
   text: { light: '#1D1D1F', dark: '#FFFFFF' },
-  secondary: { light: '#000000CC', dark: '#FFFFFFCC' },
-  tertiary: { light: '#0000007A', dark: '#FFFFFF7A' },
-  track: { light: '#E8E8ED', dark: '#FFFFFF26' },
-  accent: { light: '#0071E3', dark: '#2997FF' },
+  secondary: { light: '#6E6E73', dark: '#AEAEB2' },
+  tertiary: { light: '#8E8E93', dark: '#8E8E93' },
+  panel: { light: '#F5F5F7', dark: '#2C2C2E' },
+  brand: { light: '#E60012', dark: '#FF4D57' },
   warn: { light: '#FF9500', dark: '#FF9F0A' },
   danger: { light: '#FF3B30', dark: '#FF453A' },
 };
 
-// 通用流量用 Apple Blue，定向流量用中性灰
-const SERIES = {
-  general: { label: '通用', color: C.accent },
-  directed: { label: '定向', color: C.tertiary },
+function palette(light, dark, symbol) {
+  return {
+    tint: { light, dark },
+    card: { light: mix(light, BG.light, 0.08), dark: mix(dark, BG.dark, 0.16) },
+    track: { light: mix(light, BG.light, 0.2), dark: mix(dark, BG.dark, 0.32) },
+    symbol,
+  };
+}
+
+const THEME = {
+  fee: palette('#E60012', '#FF5A62', 'yensign.circle.fill'),
+  general: palette('#1677FF', '#4D9CFF', 'antenna.radiowaves.left.and.right'),
+  directed: palette('#7B4DFF', '#A98EFF', 'square.grid.2x2.fill'),
+  voice: palette('#F07800', '#FFA040', 'phone.fill'),
 };
 
 function T(text, size, color, weight, extra) {
@@ -824,7 +848,7 @@ function ratioColor(ratio, base) {
 }
 
 // Egern 实机排版：一行里只要有带 flex 的子元素，这一行就会吃掉父容器剩下的全部高度，
-// 内容贴着顶部，弹性 spacer 分不到空间。所以这类行必须指定 height。
+// 内容贴着顶部，弹性 spacer 分不到空间。所以这类行和卡片都指定 height。
 // 高度按 iPhone 实测行高估算：含中文的系统字体一行约 1.22 倍字号。
 const LINE = 1.22;
 
@@ -850,8 +874,8 @@ function amount(value, unit, size, color, unitSize) {
   return row(children, Math.max(2, Math.round(size / 8)), { alignItems: 'end' });
 }
 
-// 剩余比例条；没有比例时占同样高度的空位，保证几列的说明文字对齐
-function bar(ratio, color, h) {
+// 剩余比例条；没有比例时占同样高度的空位，保证几张卡的说明文字对齐
+function bar(ratio, color, h, track) {
   if (ratio === null || ratio === undefined) return { type: 'stack', height: h, children: [] };
   const r = Math.max(0, Math.min(1000, Math.round(ratio * 1000)));
   const children =
@@ -861,72 +885,82 @@ function bar(ratio, color, h) {
           { type: 'stack', flex: r, height: h, borderRadius: h / 2, backgroundColor: ratioColor(ratio, color), children: [] },
           ...(r < 1000 ? [{ type: 'spacer', flex: 1000 - r }] : []),
         ];
-  return { type: 'stack', direction: 'row', height: h, borderRadius: h / 2, backgroundColor: C.track, children };
+  return { type: 'stack', direction: 'row', height: h, borderRadius: h / 2, backgroundColor: track, children };
 }
 
 function feeColor(view) {
   return view.feeLow ? C.danger : C.text;
 }
 
-function voiceText(view) {
-  return view.voice ? '语音 ' + view.voice.value + ' ' + view.voice.unit : '';
+/* ---------- 卡片内容：各尺寸共用 ---------- */
+
+function feeCard(view) {
+  if (!view.fee) return null;
+  return { key: 'fee', short: '话费', label: view.fee.title, value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view), ratio: null, sub: '', side: '' };
 }
 
-/* ---------- 内容挑选：各尺寸共用 ---------- */
+function voiceCard(view) {
+  if (!view.voice) return null;
+  return { key: 'voice', short: '语音', label: view.voice.title, value: { v: view.voice.value, u: view.voice.unit }, ratio: null, sub: '', side: '' };
+}
 
-function groupTile(key, g) {
-  const def = SERIES[key];
+function flowCard(key, g) {
+  const name = key === 'general' ? '通用' : '定向';
   if (g.kind === 'limited') {
     return {
-      label: def.label + '剩余',
+      key,
+      short: name,
+      label: name + '剩余',
       value: g.remain,
       ratio: g.ratio,
-      color: def.color,
-      lines: ['已用 ' + flowText(g.used), '共 ' + flowText(g.total) + (g.withUnlimited ? ' · 含不限' : '')],
+      sub: '已用 ' + flowText(g.used),
+      side: '共 ' + flowText(g.total) + (g.withUnlimited ? ' · 含不限' : ''),
     };
   }
-  return {
-    label: def.label + '已用',
-    value: g.used,
-    ratio: null,
-    color: def.color,
-    lines: [g.kind === 'unlimited' ? '不限量' : '未提供总量', ''],
-  };
+  return { key, short: name, label: name + '已用', value: g.used, ratio: null, sub: g.kind === 'unlimited' ? '不限量' : '未提供总量', side: '' };
 }
 
-// 中号/大号的几列：话费 →（有空位时）语音 → 通用/定向；没有流量明细时用首页的流量总数
-function tilesFor(view, max) {
-  const tiles = [];
-  const groups = ['general', 'directed'].filter((k) => view[k]).map((k) => groupTile(k, view[k]));
-  const flowTiles = groups.length || !view.flow ? groups : [{ label: view.flow.title, value: { v: view.flow.value, u: view.flow.unit }, ratio: null, lines: ['', ''] }];
-  let fee = null;
-  if (view.fee) {
-    fee = { label: view.fee.title, value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view), ratio: null, lines: ['', ''] };
-    tiles.push(fee);
-  }
-  if (view.voice) {
-    if (tiles.length + flowTiles.length < max) {
-      tiles.push({ label: view.voice.title, value: { v: view.voice.value, u: view.voice.unit }, ratio: null, lines: ['', ''] });
-    } else if (fee) {
-      fee.lines[0] = voiceText(view);
-    }
-  }
-  return tiles.concat(flowTiles).slice(0, max);
+// 流量卡：有明细时分通用/定向；没有明细时用首页的流量总数
+function flowCards(view) {
+  const list = ['general', 'directed'].filter((k) => view[k]).map((k) => flowCard(k, view[k]));
+  if (list.length || !view.flow) return list;
+  return [{ key: 'general', short: '流量', label: view.flow.title, value: { v: view.flow.value, u: view.flow.unit }, ratio: null, sub: '', side: '' }];
 }
 
-// 小号和锁屏的主数字：优先通用剩余
+// 中号/大号的三张卡：话费 →（有空位时）语音 → 流量；语音放不下就写在话费卡底部
+function cardsFor(view, max) {
+  const fee = feeCard(view);
+  const voice = voiceCard(view);
+  const flows = flowCards(view);
+  const cards = fee ? [fee] : [];
+  if (voice) {
+    if (cards.length + flows.length < max) cards.push(voice);
+    else if (fee) fee.sub = '语音 ' + view.voice.value + ' ' + view.voice.unit;
+  }
+  return cards.concat(flows).slice(0, max);
+}
+
+// 小号的三条：话费、流量，不满三条时用语音补上
+function stripsFor(view) {
+  const list = [feeCard(view)].concat(flowCards(view)).filter(Boolean);
+  const voice = voiceCard(view);
+  if (voice && list.length < 3) list.push(voice);
+  return list.slice(0, 3);
+}
+
+// 锁屏的主数字：优先通用剩余
 function heroFor(view) {
   const g = view.general;
-  if (g && g.kind === 'limited') return { label: '通用剩余', short: '通用', value: g.remain, side: '共 ' + flowText(g.total), ratio: g.ratio, color: C.accent, key: 'general' };
+  if (g && g.kind === 'limited') return { label: '通用剩余', short: '通用', value: g.remain, side: '共 ' + flowText(g.total), ratio: g.ratio, key: 'general' };
   if (g) return { label: '通用已用', short: '通用', value: g.used, side: g.kind === 'unlimited' ? '不限量' : '', ratio: null, key: 'general' };
   if (view.flow) return { label: view.flow.title, short: '流量', value: { v: view.flow.value, u: view.flow.unit }, side: '', ratio: null, key: 'flow' };
   if (view.fee) return { label: view.fee.title, short: '话费', value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view), side: '', ratio: null, key: 'fee' };
   const d = view.directed;
-  if (d) return { label: d.kind === 'limited' ? '定向剩余' : '定向已用', short: '定向', value: d.kind === 'limited' ? d.remain : d.used, side: d.kind === 'limited' ? '共 ' + flowText(d.total) : '', ratio: d.kind === 'limited' ? d.ratio : null, color: C.tertiary, key: 'directed' };
+  if (d) return { label: d.kind === 'limited' ? '定向剩余' : '定向已用', short: '定向', value: d.kind === 'limited' ? d.remain : d.used, side: d.kind === 'limited' ? '共 ' + flowText(d.total) : '', ratio: d.kind === 'limited' ? d.ratio : null, key: 'directed' };
   return null;
 }
 
-// 主数字以外，再挑最多 n 项：话费、定向、语音、流量总数
+// 锁屏主数字以外，再挑最多 n 项：话费、定向、语音、流量总数
 function extrasFor(view, hero, n) {
   const out = [];
   if (view.fee && hero.key !== 'fee') out.push({ label: '话费', value: { v: view.fee.value, u: view.fee.unit }, valueColor: feeColor(view) });
@@ -943,7 +977,7 @@ function extrasFor(view, hero, n) {
 
 /* ---------- 公共部件 ---------- */
 
-// 标题栏：标题 + 更新时间；查询失败时时间前加警示图标，紧凑尺寸用 badge 代替时间。
+// 标题栏：红色竖条 + 标题 + 更新时间；查询失败时时间前加警示图标，紧凑尺寸用 badge 代替时间。
 // 小号宽度只有约 120pt：时间不是今天时只显示日期，状态用更短的写法，并且不显示尾号
 function header(view, size, compact, narrow) {
   const badge = compact ? (narrow ? view.badgeShort : view.badge) : '';
@@ -952,47 +986,67 @@ function header(view, size, compact, narrow) {
   const time = narrow ? view.timeShort : view.time;
   return row(
     [
+      { type: 'stack', width: 3, height: Math.round(size * 0.92), borderRadius: 1.5, backgroundColor: C.brand, children: [] },
       T(view.title, size, C.text, 'semibold', { minScale: 0.8 }),
       ...(showSuffix ? [T(view.suffix, size - 1, C.tertiary, 'regular', { minScale: 0.8 })] : []),
       spacer(),
       ...(view.tone === 'normal' ? [] : [icon('exclamationmark.triangle.fill', size - 2, status)]),
       T(badge || time, size - 1, badge && view.tone === 'normal' ? C.secondary : status, 'regular', { minScale: 0.8 }),
     ],
-    4,
+    5,
+    { height: Math.ceil(lineH(size)) },
   );
 }
 
-// full=false 时只有标签和数字（几列都没有比例条和说明时，不留空行）
-function tile(t, s, full) {
-  const head = [T(t.label, s.label, C.secondary), spacer(s.labelGap), amount(t.value.v, t.value.u, s.value, t.valueColor || C.text, s.unit)];
+// 竖向卡片的最小高度：上内边距、标题行、数字（、比例条、两行说明）、下内边距，再留 2pt 余量
+function cardHeight(s, full) {
+  const top = s.pad[0] + Math.ceil(lineH(s.label)) + 2;
+  const tail = full ? s.barGap * 2 + s.bar + lineH(s.caption) * 2 : 0;
+  return Math.max(s.height, Math.ceil(top + amountH(s.value, s.unit) + tail + s.pad[2]) + 2);
+}
+
+// 说明行固定高度：没有内容时也占位，几张卡的数字和说明才能对齐
+function captionLine(text, size, color) {
+  const h = Math.ceil(lineH(size));
+  return text ? row([T(text, size, color, 'regular', { minScale: 0.7 })], 0, { height: h }) : { type: 'stack', height: h, children: [] };
+}
+
+// 竖向卡片（中号、大号）：标题在上，数字、比例条、已用/总量在下；
+// full=false 时几张卡都没有比例条和说明，只放标题和数字
+function card(c, s, full, height) {
+  const p = THEME[c.key];
   const tail = full
     ? [
         spacer(s.barGap),
-        bar(t.ratio, t.color || C.accent, s.bar),
+        bar(c.ratio, p.tint, s.bar, p.track),
         spacer(s.barGap),
-        ...t.lines.map((line) => T(line || ' ', s.caption, C.tertiary, 'regular', { minScale: 0.7 })),
+        captionLine(c.sub, s.caption, C.secondary),
+        captionLine(c.side, s.caption, C.tertiary),
       ]
     : [];
-  return col(head.concat(tail), s.lineGap, { flex: 1 });
+  return col(
+    [
+      row([icon(p.symbol, s.icon, p.tint), T(c.label, s.label, p.tint, 'semibold', { minScale: 0.7 })], 4, { height: Math.ceil(lineH(s.label)) }),
+      spacer(),
+      amount(c.value.v, c.value.u, s.value, c.valueColor || C.text, s.unit),
+      ...tail,
+    ],
+    0,
+    { flex: 1, height, padding: s.pad, backgroundColor: p.card, borderRadius: s.radius },
+  );
 }
 
-// tile 的内容高度：标签、数字（、比例条、两行说明）加子元素之间的间距，再留 2pt 余量
-function tileHeight(s, full) {
-  const head = lineH(s.label) + s.labelGap + amountH(s.value, s.unit) + s.lineGap * 2;
-  const tail = full ? s.barGap * 2 + s.bar + lineH(s.caption) * 2 + s.lineGap * 5 : 0;
-  return Math.ceil(head + tail) + 2;
-}
-
-function tileRow(tiles, s, gap) {
-  const full = tiles.some((t) => t.ratio !== null || t.lines.some(Boolean));
-  return row(tiles.map((t) => tile(t, s, full)), gap, { alignItems: 'start', height: tileHeight(s, full) });
+function cardRow(cards, s) {
+  const full = cards.some((c) => c.ratio !== null || c.sub || c.side);
+  const height = cardHeight(s, full);
+  return row(cards.map((c) => card(c, s, full, height)), s.gap, { alignItems: 'start', height });
 }
 
 function rootWidget(children, extra) {
   return {
     type: 'widget',
     backgroundColor: C.bg,
-    padding: 16,
+    padding: 14,
     gap: 0,
     refreshAfter: new Date(Date.now() + REFRESH_MS).toISOString(),
     children,
@@ -1002,76 +1056,77 @@ function rootWidget(children, extra) {
 
 /* ---------- 主屏幕 ---------- */
 
-function buildSmall(view) {
-  const hero = heroFor(view);
-  if (!hero) return messageView(view, '暂无数据', 'systemSmall');
-  const extras = extrasFor(view, hero, 2);
-  return rootWidget(
-    [
-      header(view, 13, true, true),
-      spacer(),
-      row([T(hero.label, 12, C.secondary), spacer(), ...(hero.side ? [T(hero.side, 11, C.tertiary, 'regular', { minScale: 0.8 })] : [])], 4),
-      amount(hero.value.v, hero.value.u, 28, hero.valueColor || C.text, 13),
-      ...(hero.ratio !== null ? [spacer(5), bar(hero.ratio, hero.color, 4)] : []),
-      spacer(10),
-      row(
-        extras.map((x) => col([T(x.label, 11, C.secondary), amount(x.value.v, x.value.u, 14, x.valueColor || C.text, 11)], 1, { flex: 1 })),
-        10,
-        { alignItems: 'start', height: Math.ceil(lineH(11) + 1 + amountH(14, 11)) + 2 },
-      ),
-    ],
-    { padding: [15, 16, 15, 16] },
+// 小号的一条：图标、名称、数字一行，流量再加一条比例条
+const STRIP = { height: 34, pad: [5, 9, 5, 9], icon: 11, label: 11, value: 13, unit: 9, bar: 3, radius: 10 };
+
+function strip(c, s) {
+  const p = THEME[c.key];
+  const top = row(
+    [icon(p.symbol, s.icon, p.tint), T(c.short, s.label, p.tint, 'semibold', { minScale: 0.8 }), spacer(), amount(c.value.v, c.value.u, s.value, c.valueColor || C.text, s.unit)],
+    4,
+    { height: Math.ceil(amountH(s.value, s.unit)) },
   );
+  const body = c.ratio !== null ? [spacer(), top, spacer(3), bar(c.ratio, p.tint, s.bar, p.track), spacer()] : [spacer(), top, spacer()];
+  return col(body, 0, { height: s.height, padding: s.pad, backgroundColor: p.card, borderRadius: s.radius });
 }
 
-const MEDIUM = { label: 11, labelGap: 1, value: 24, unit: 11, barGap: 6, bar: 4, caption: 11, lineGap: 0 };
-const LARGE = { label: 12, labelGap: 2, value: 26, unit: 13, barGap: 8, bar: 5, caption: 12, lineGap: 1 };
-
-function buildMedium(view) {
-  const tiles = tilesFor(view, 3);
-  if (!tiles.length) return messageView(view, '暂无数据', 'systemMedium');
-  return rootWidget([header(view, 13, true), spacer(), tileRow(tiles, MEDIUM, 14)], {
-    padding: [15, 16, 15, 16],
+function buildSmall(view) {
+  const strips = stripsFor(view);
+  if (!strips.length) return messageView(view, '暂无数据', 'systemSmall');
+  return rootWidget([header(view, 12, true, true), spacer(), col(strips.map((c) => strip(c, STRIP)), 4)], {
+    padding: [10, 11, 10, 11],
   });
 }
 
+const MEDIUM = { height: 104, pad: [9, 9, 9, 10], icon: 11, label: 11, value: 20, unit: 10, barGap: 5, bar: 4, caption: 10, radius: 14, gap: 8 };
+const LARGE = { height: 116, pad: [10, 10, 10, 10], icon: 12, label: 12, value: 24, unit: 11, barGap: 6, bar: 5, caption: 11, radius: 16, gap: 10 };
+
+function buildMedium(view) {
+  const cards = cardsFor(view, 3);
+  if (!cards.length) return messageView(view, '暂无数据', 'systemMedium');
+  return rootWidget([header(view, 13, true), spacer(), cardRow(cards, MEDIUM)], { padding: [11, 14, 11, 14] });
+}
+
+// 流量包面板用 flex 占满卡片下方剩余的高度，条目靠上排，不会在卡片和面板之间留出一大块空白
 function packageCard(view, maxRows) {
   const pkgs = view.packages.slice(0, Math.max(1, maxRows));
   const more = view.packages.length - pkgs.length;
   return col(
     [
-      row([T('流量包', 12, C.secondary), spacer(), ...(more > 0 ? [T('另有 ' + more + ' 项', 11, C.tertiary)] : [])], 4),
+      row([T('流量包', 12, C.secondary, 'semibold'), spacer(), ...(more > 0 ? [T('另有 ' + more + ' 项', 11, C.tertiary)] : [])], 4, {
+        height: Math.ceil(lineH(12)),
+      }),
       ...pkgs.map((p) =>
         row(
           [
-            { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: p.directed ? SERIES.directed.color : SERIES.general.color, children: [] },
+            { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: (p.directed ? THEME.directed : THEME.general).tint, children: [] },
             T(p.name, 13, C.text, 'regular', { flex: 1, minScale: 0.75 }),
             T(packageLine(p), 12, C.secondary, 'regular', { minScale: 0.7 }),
           ],
           8,
-          { height: Math.ceil(lineH(13)) + 1 },
+          { height: Math.ceil(lineH(13)) },
         ),
       ),
+      spacer(),
     ],
-    8,
-    { padding: 12, backgroundColor: C.card, borderRadius: 12 },
+    6,
+    { flex: 1, padding: [10, 12, 10, 12], backgroundColor: C.panel, borderRadius: 16 },
   );
 }
 
 function buildLarge(view) {
-  const tiles = tilesFor(view, 3);
-  if (!tiles.length) return messageView(view, '暂无数据', 'systemLarge');
-  // 按小屏 iPhone 大号（内容区约 292pt 高）估算能放下几行流量包
-  const maxRows = 3 + (view.packageName ? 0 : 1) - (view.message ? 1 : 0);
-  // 没有流量包列表时，把三列放在中间，避免下半部空着
-  const top = view.packages.length ? spacer(14) : spacer();
+  const cards = cardsFor(view, 3);
+  if (!cards.length) return messageView(view, '暂无数据', 'systemLarge');
+  // 按小屏 iPhone 大号（内容区约 296pt 高）估算能放下几行流量包
+  const maxRows = 4 + (view.packageName ? 0 : 1) - (view.message ? 1 : 0);
+  const hasList = view.packages.length > 0;
   return rootWidget([
     header(view, 14, false),
     ...(view.packageName ? [spacer(2), T(view.packageName, 12, C.tertiary)] : []),
-    top,
-    tileRow(tiles, LARGE, 16),
-    spacer(),
-    ...(view.packages.length ? [packageCard(view, maxRows)] : []),
+    hasList ? spacer(10) : spacer(),
+    cardRow(cards, LARGE),
+    hasList ? spacer(10) : spacer(),
+    ...(hasList ? [packageCard(view, maxRows)] : []),
     ...(view.message ? [spacer(8), T(view.message, 12, view.tone === 'normal' ? C.secondary : toneColor(view.tone), 'regular', { minScale: 0.6 })] : []),
   ]);
 }

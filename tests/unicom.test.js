@@ -229,9 +229,8 @@ test('正常查询：各尺寸 DSL 合法，数值和分组正确', async () => 
       assert.doesNotMatch(all, /国内语音/); // 语音资源不算流量包
     }
     if (family === 'systemSmall') {
-      assert.match(all, /通用剩余\|共 30GB\|12\.5\|GB/);
-      assert.match(all, /话费\|45\.67\|元/);
-      assert.match(all, /定向剩余\|10\|GB/);
+      // 三条：话费、通用、定向
+      assert.match(all, /话费\|45\.67\|元\|通用\|12\.5\|GB\|定向\|10\|GB/);
     }
     if (family === 'systemMedium') assert.match(all, /语音 120 分钟/); // 三列放不下时，语音并入话费列
     if (family === 'accessoryInline') assert.match(all, /话费 45\.67元 · 通用剩 12\.5GB/);
